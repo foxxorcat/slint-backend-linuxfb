@@ -1,0 +1,17 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slint = { version = "1.14.1", default-features = false, features = [
+    "libm",
+    "compat-1-2",
+    "renderer-software",
+] }
+
+slint-backend-linuxfb = { path = "../../" ,default-features = false }
+tracing-subscriber = "0.3"
+
+[build-dependencies]
+slint-build = "1.14.1"

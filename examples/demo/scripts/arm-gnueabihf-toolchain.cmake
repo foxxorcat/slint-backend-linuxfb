@@ -1,0 +1,37 @@
+# scripts/arm-gnueabihf-toolchain.cmake
+
+# 1. 定义目标系统信息
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+set(CMAKE_SYSTEM_VERSION 1)
+
+# 2. 自动推断工具链路径
+get_filename_component(SCRIPTS_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
+get_filename_component(PROJECT_ROOT "${SCRIPTS_DIR}" DIRECTORY)
+set(TOOLCHAIN_PREFIX "${PROJECT_ROOT}/lib/arm-gnueabihf-cross")
+
+# 安全检查
+if(NOT EXISTS "${TOOLCHAIN_PREFIX}")
+    message(FATAL_ERROR "自动检测到的工具链目录不存在！预期路径: ${TOOLCHAIN_PREFIX}")
+endif()
+
+# 3. 配置路径和编译器
+set(TOOLCHAIN_BIN_DIR ${TOOLCHAIN_PREFIX}/bin)
+set(TARGET_TRIPLET arm-none-linux-gnueabihf)
+
+set(CMAKE_C_COMPILER ${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-gcc)
+set(CMAKE_CXX_COMPILER ${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-g++)
+set(CMAKE_Fortran_COMPILER ${TOOLCHAIN_BIN_DIR}/${TARGET_TRIPLET}-gfortran)
+
+# 4. 配置 sysroot
+set(CMAKE_SYSROOT ${TOOLCHAIN_PREFIX}/${TARGET_TRIPLET}/libc)
+
+# 5. 配置查找规则
+set(CMAKE_FIND_ROOT_PATH ${CMAKE_SYSROOT})
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+# 6. 设置安装路径
+set(CMAKE_INSTALL_PREFIX ${CMAKE_SYSROOT}/usr CACHE PATH "Install path for libraries" FORCE)

@@ -1,0 +1,37 @@
+[package]
+name = "slint-backend-linuxfb"
+version = "0.1.0"
+edition = "2021"
+description = "A Slint platform backend for Linux Framebuffer (linuxfb) and evdev"
+license = "MIT"
+repository = "https://github.com/foxxorcat/slint-backend-linuxfb"
+readme = "README.md"
+keywords = ["slint", "linux", "framebuffer", "embedded", "gui"]
+categories = ["embedded", "gui", "rendering"]
+exclude = [
+    ".gitignore",
+    ".vscode",
+]
+
+[features]
+default = ["xkb"]
+xkb = ["dep:xkbcommon-rs", "dep:xkeysym"]
+
+[dependencies]
+libc = "0.2.148"
+thiserror = "2"
+memmap2 = "0.9"
+bytemuck = { version = "1.24.0", features = ["derive"] }
+tracing = "0.1"
+
+i-slint-core = { version = "1.14.1" }
+
+# 用于 /dev/input/event* (evdev) 操作
+evdev = "0.13.2"
+xkbcommon-rs = { version = "0.1.2", features = ["server"], optional = true }
+xkeysym = { version = "0.2.1", features = ["bytemuck"], optional = true }
+ctrlc = "3.5.1"
+
+[build-dependencies]
+bindgen = "0.72"
+cc = "1.0"

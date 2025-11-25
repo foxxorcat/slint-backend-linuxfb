@@ -1,0 +1,158 @@
+
+    import { VerticalBox, HorizontalBox, GroupBox, Button, LineEdit, ScrollView, Slider } from "std-widgets.slint";
+export component DemoApp inherits Window {
+    width: 1024px;
+    height: 600px;
+    title: "LinuxFB Demo";
+    background: #1c1c1c;
+
+    in-out property <int> counter: 0;
+    in-out property <string> input-text: "";
+    VerticalBox {
+        padding: 20px;
+        spacing: 20px;
+
+        Text {
+            text: "Linux Framebuffer Input Demo";
+            font-size: 32px;
+            horizontal-alignment: center;
+            color: white;
+        }
+
+        HorizontalBox {
+            spacing: 20px;
+
+            // 左侧栏：点击与输入
+                VerticalBox {
+                spacing: 20px;
+                alignment: start;
+
+                GroupBox {
+                    title: "1. Click Test";
+                    VerticalBox {
+                        spacing: 10px;
+                        Text {
+                            text: "Counter: " + root.counter;
+                            font-size: 20px;
+                            horizontal-alignment: center;
+                            color: #aaf;
+                        }
+
+                        Button {
+                            text: "Tap Me (+1)";
+                            height: 50px;
+                            clicked => {
+                                root.counter += 1;
+                            }
+                        }
+                    }
+                }
+
+                GroupBox {
+                    title: "2. (Keyboard Test)";
+                    VerticalBox {
+                        spacing: 10px;
+                        Text {
+                            text: "Please input text:";
+                            color: #ccc;
+                        }
+
+                        LineEdit {
+                            placeholder-text: "Type something here...";
+                            font-size: 16px;
+                            height: 45px;
+                            text <=> root.input-text;
+                        }
+
+                        Text {
+                            text: "Echo: " + (root.input-text == "" ? "(Waiting for input...)" : root.input-text);
+                            color: #88ff88;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // 右侧栏：滑动与拖拽
+                VerticalBox {
+                spacing: 20px;
+                alignment: start;
+
+                GroupBox {
+                    title: "3. Scroll/Swipe ";
+                    Rectangle {
+                        background: #2c2c2c;
+                        border-color: #444;
+                        border-width: 1px;
+                        height: 200px;
+                        ScrollView {
+                            width: 100%;
+                            height: 100%;
+                            viewport-height: 500px; // 内容比可视区域长，触发滚动
+                                
+                                VerticalBox {
+                                spacing: 5px;
+                                padding: 10px;
+                                for i in 15: Rectangle {
+                                    height: 30px;
+                                    background: mod(i, 2) == 0 ? #3a3a3a : #333;
+                                    border-radius: 4px;
+                                    Text {
+                                        text: "List Item " + (i + 1);
+                                        color: #ddd;
+                                        x: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                GroupBox {
+                    title: "4. Drag/Slider";
+                    VerticalBox {
+                        spacing: 10px;
+                        Text {
+                            text: "Value: " + round(my-slider.value);
+                            color: white;
+                            horizontal-alignment: center;
+                        }
+
+                        my-slider := Slider {
+                            minimum: 0;
+                            maximum: 100;
+                            value: 50;
+                            height: 40px;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 底部：渲染刷新率视觉检查
+            VerticalBox {
+            spacing: 5px;
+            Text {
+                text: "Rendering Animation Check (FPS)";
+                font-size: 12px;
+                color: #666;
+            }
+
+            Rectangle {
+                height: 8px;
+                width: parent.width;
+                background: #333;
+                border-radius: 4px;
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    height: parent.height;
+                    width: parent.width * (mod(animation-tick(), 2s) / 2s);
+                    background: #00ff00;
+                    border-radius: 4px;
+                }
+            }
+        }
+    }
+}

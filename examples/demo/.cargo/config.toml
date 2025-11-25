@@ -1,0 +1,7 @@
+[target.armv7-unknown-linux-musleabihf]
+linker = "lib/arm-linux-musleabihf-cross/bin/arm-linux-musleabihf-gcc"
+rustflags = []
+
+[target.armv7-unknown-linux-gnueabihf]
+linker = "lib/arm-gnueabihf-cross/bin/arm-none-linux-gnueabihf-gcc"
+rustflags = []
