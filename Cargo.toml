@@ -1,6 +1,6 @@
 [package]
 name = "slint-backend-linuxfb"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Slint platform backend for Linux Framebuffer (linuxfb) and evdev"
 license = "MIT"
@@ -24,7 +24,7 @@ memmap2 = "0.9"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 tracing = "0.1"
 
-i-slint-core = { version = "1.14.1" }
+i-slint-core = { version = "1.14.1", features = ["std", "software-renderer-systemfonts"]}
 
 # 用于 /dev/input/event* (evdev) 操作
 evdev = "0.13.2"

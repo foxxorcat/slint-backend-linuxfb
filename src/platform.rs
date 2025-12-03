@@ -2,9 +2,10 @@ use crate::error::Error;
 use crate::input::{InputConfig, InputManager}; 
 use crate::pixels::PixelFormat;
 use crate::window::LinuxFbWindowAdapter;
+use i_slint_core::api::EventLoopError;
 use i_slint_core::platform::{
     software_renderer::{RepaintBufferType, SoftwareRenderer},
-    Platform, PlatformError, WindowAdapter, WindowEvent,
+    EventLoopProxy, Platform, PlatformError, WindowAdapter, WindowEvent,
 };
 use i_slint_core::renderer::RendererSealed;
 use crate::linuxfb::{
@@ -16,12 +17,61 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::rc::Rc;
 use std::time::Duration;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::os::unix::io::RawFd;
 use libc;
 
 // 全局静态变量，用于在 Ctrl+C 信号处理器中恢复 TTY
 static ACTIVE_TTY_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+// 常量定义
+const EVENTFD_BUFFER_LEN: usize = 8;
+const DEFAULT_TIMEOUT: Duration = Duration::from_millis(16);
+
+/// 用于跨线程唤醒事件循环的代理
+#[derive(Clone)]
+struct LinuxFbProxy {
+    quit_flag: Arc<AtomicBool>,
+    sender: Sender<Box<dyn FnOnce() + Send>>,
+    event_fd: RawFd,
+}
+
+impl LinuxFbProxy {
+    /// 辅助方法：向 eventfd 写入数据以唤醒 poll 循环
+    fn notify_event_loop(&self) -> Result<(), EventLoopError> {
+        let val: u64 = 1;
+        // SAFETY: event_fd 是有效的文件描述符，写入 8 字节符合 eventfd API 规范
+        let res = unsafe {
+            libc::write(self.event_fd, &val as *const _ as *const _, EVENTFD_BUFFER_LEN)
+        };
+        
+        if res < 0 {
+            // 写入失败通常意味着 event loop 可能已经关闭
+            return Err(EventLoopError::EventLoopTerminated);
+        }
+        Ok(())
+    }
+}
+
+impl EventLoopProxy for LinuxFbProxy {
+    fn quit_event_loop(&self) -> Result<(), EventLoopError> {
+        self.quit_flag.store(true, Ordering::Relaxed);
+        self.notify_event_loop()
+    }
+
+    fn invoke_from_event_loop(
+        &self,
+        event: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), EventLoopError> {
+        self.sender
+            .send(event)
+            .map_err(|_| EventLoopError::EventLoopTerminated)?;
+        self.notify_event_loop()
+    }
+}
 
 /// Linux Framebuffer 平台构建器 (V2)
 #[derive(Default)]
@@ -98,6 +148,11 @@ pub struct LinuxFbPlatform {
     input_manager: RefCell<Option<InputManager>>,
     tty: Option<File>,
     config: LinuxFbPlatformBuilder,
+
+    event_fd: RawFd,
+    quit_flag: Arc<AtomicBool>,
+    event_receiver: Receiver<Box<dyn FnOnce() + Send>>,
+    proxy: LinuxFbProxy,
 }
 
 impl LinuxFbPlatform {
@@ -159,11 +214,33 @@ impl LinuxFbPlatform {
             std::process::exit(0);
         });
 
+        // 创建非阻塞的 eventfd
+        let event_fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+        if event_fd == -1 {
+            return Err(Error::Other(
+                "Failed to create eventfd for event loop".into(),
+            ));
+        }
+
+        let (sender, receiver) = channel();
+        let quit_flag = Arc::new(AtomicBool::new(false));
+
+        // 直接创建代理实例
+        let proxy = LinuxFbProxy {
+            quit_flag: quit_flag.clone(),
+            sender,
+            event_fd,
+        };
+
         Ok(Self {
             adapter: RefCell::new(None),
             input_manager: RefCell::new(None),
             tty,
             config,
+            event_fd,
+            quit_flag,
+            event_receiver: receiver,
+            proxy,
         })
     }
 }
@@ -178,6 +255,9 @@ impl Drop for LinuxFbPlatform {
         }
         if let Ok(mut guard) = ACTIVE_TTY_PATH.lock() {
             *guard = None;
+        }
+        if self.event_fd != -1 {
+            unsafe { libc::close(self.event_fd) };
         }
     }
 }
@@ -260,6 +340,16 @@ impl Platform for LinuxFbPlatform {
         }
 
         loop {
+            // 0. 检查退出标志
+            if self.quit_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            // 处理来自 EventLoopProxy 的事件 (跨线程回调)
+            while let Ok(task) = self.event_receiver.try_recv() {
+                task();
+            }
+
             // 1. 处理 Slint 定时器和动画
             i_slint_core::platform::update_timers_and_animations();
 
@@ -292,33 +382,77 @@ impl Platform for LinuxFbPlatform {
                 }
             }
 
+            // 检查是否在上述处理中触发了退出
+            if self.quit_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
             // 4. 计算休眠时间 & 等待事件 (Poll)
             let next_timer = i_slint_core::platform::duration_until_next_timer_update();
             
-            // 保持 16ms 心跳，处理跨线程事件回调
-            let timeout = next_timer.unwrap_or(Duration::from_millis(16));
+            // 保持心跳，处理跨线程事件回调。默认 16ms 约等于 60fps 的检查频率
+            let timeout = next_timer.unwrap_or(DEFAULT_TIMEOUT);
 
             // 获取所有输入设备的文件描述符
             let input_fds = input_manager.get_poll_fds();
-            let mut poll_fds: Vec<libc::pollfd> = input_fds.into_iter().map(|fd| libc::pollfd {
-                fd,
+            
+            // 构建 pollfd 向量，预留 +1 空间给 event_fd
+            let mut poll_fds: Vec<libc::pollfd> = Vec::with_capacity(input_fds.len() + 1);
+            
+            for fd in input_fds {
+                poll_fds.push(libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0
+                });
+            }
+
+            // 将 event_fd 加入 poll 列表，以便被 proxy 唤醒
+            poll_fds.push(libc::pollfd {
+                fd: self.event_fd,
                 events: libc::POLLIN,
-                revents: 0
-            }).collect();
+                revents: 0,
+            });
 
             let timeout_ms = timeout.as_millis() as i32;
 
             // 调用 libc::poll 挂起线程
             if !poll_fds.is_empty() || timeout_ms > 0 {
-                unsafe {
-                    libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, timeout_ms);
+                // SAFETY: poll_fds.as_mut_ptr() 是有效的，长度也正确
+                let ret = unsafe {
+                    libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, timeout_ms)
+                };
+
+                if ret < 0 {
+                    // 处理 poll 错误
+                    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    // 忽略 EINTR (系统调用中断)，其他错误则打印警告
+                    if errno != libc::EINTR {
+                        tracing::warn!("poll failed with errno: {}", errno);
+                    }
+                }
+
+                // 如果被 event_fd 唤醒，读取数据以清除 POLLIN 状态
+                if let Some(last) = poll_fds.last() {
+                    if last.revents & libc::POLLIN != 0 {
+                        let mut val: u64 = 0;
+                        // SAFETY: event_fd 可读，读取 8 字节清除计数
+                        unsafe {
+                            libc::read(self.event_fd, &mut val as *mut _ as *mut _, EVENTFD_BUFFER_LEN);
+                        }
+                    }
                 }
             } else {
-                // 最小休眠时间
+                // 如果没有 fd 可轮询，则使用线程休眠
                 if timeout_ms > 0 {
                     std::thread::sleep(timeout);
                 }
             }
         }
+        Ok(())
+    }
+
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        Some(Box::new(self.proxy.clone()))
     }
 }
